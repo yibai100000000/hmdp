@@ -1,5 +1,6 @@
 package com.hmdp.service.impl;
 
+import cn.hutool.core.util.BooleanUtil;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
@@ -36,21 +37,59 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         String key=CACHE_SHOP_KEY+id;
 
         Object o = redisTemplate.opsForValue().get(key);
+        //避免缓存穿透
         if(o!=null && !o.equals("null")){
             return Result.ok(o);
         }else if(o.equals("null")){
             return Result.fail("商铺不存在");
         }
 
-        Shop shop=getById(id);
-        if(shop==null){
+        //实现缓存重建
+        String lockKey=LOCK_SHOP_KEY+id;
+        Shop shop= null;
+        try {
+            while(queryWithMutex(lockKey)){
+                //申请失败进行一段时间的等待，重新申请锁
+                Thread.sleep(50);
+            }
+            //双检
+            if(redisTemplate.opsForValue().get(key)!=null){
+                if(o.equals("null")){
+                    return Result.fail("商铺不存在");
+                }else{
+                    return Result.ok(o);
+                }
+            }
+            shop = getById(id);
+            if(shop==null){
 
-            //向redis中写入空对象
-            redisTemplate.opsForValue().set(key,"null",CACHE_NULL_TTL, TimeUnit.MINUTES);
-            return Result.fail("商铺不存在");
+                //向redis中写入空对象
+                redisTemplate.opsForValue().set(key,"null",CACHE_NULL_TTL, TimeUnit.MINUTES);
+                return Result.fail("商铺不存在");
+            }
+            redisTemplate.opsForValue().set(key,shop,CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            //释放锁
+            unLock(lockKey);
         }
-        redisTemplate.opsForValue().set(key,shop,CACHE_SHOP_TTL, TimeUnit.MINUTES);
         return Result.ok(shop);
+    }
+
+    private boolean queryWithMutex(String key){
+        //申请在redis上的变量,CAS?
+        //申请成功进行查询操作，写入对象
+        return tryLock(key);
+    }
+
+    private boolean tryLock(String key){
+        Boolean b = redisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(b);
+    }
+
+    private void unLock(String key){
+        redisTemplate.delete(key);
     }
 
     @Override
