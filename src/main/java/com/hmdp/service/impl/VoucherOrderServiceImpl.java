@@ -105,8 +105,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return;
         }
         try{
-            return voucherOrderService.createVoucherOrder(voucherId);
+            voucherOrderService.createVoucherOrder(voucherOrder);
         }finally {
+            log.error("异步创建订单失败");
             lock.unlock();
         }
 
